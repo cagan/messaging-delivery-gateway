@@ -1,8 +1,9 @@
 package com.cagan.messaginggateway.repository;
 
-import com.cagan.messaginggateway.entity.Message;
-import org.springframework.data.jpa.repository.JpaRepository;
+import com.cagan.messaginggateway.model.Message;
+import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public interface MessageRepository extends JpaRepository<Message, Long> { }
+public interface MessageRepository extends MongoRepository<Message, String> {
+}

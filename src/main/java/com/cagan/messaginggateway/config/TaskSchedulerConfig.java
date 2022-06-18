@@ -11,7 +11,7 @@ public class TaskSchedulerConfig {
     public ThreadPoolTaskScheduler threadPoolTaskScheduler() {
         ThreadPoolTaskScheduler threadPoolTaskScheduler = new ThreadPoolTaskScheduler();
         threadPoolTaskScheduler.setPoolSize(3);
-        threadPoolTaskScheduler.setThreadNamePrefix("messageSenderTask");
+        threadPoolTaskScheduler.setThreadNamePrefix("messaging_gateway");
         return threadPoolTaskScheduler;
     }
 }

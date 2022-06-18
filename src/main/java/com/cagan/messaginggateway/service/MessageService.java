@@ -1,111 +1,74 @@
 package com.cagan.messaginggateway.service;
-
-import com.cagan.messaginggateway.entity.Client;
-import com.cagan.messaginggateway.entity.Message;
-import com.cagan.messaginggateway.entity.MessageLog;
-import com.cagan.messaginggateway.repository.ClientRepository;
+import com.cagan.messaginggateway.integration.DeliveryService;
+import com.cagan.messaginggateway.model.Message;
+import com.cagan.messaginggateway.model.MessageLog;
+import com.cagan.messaginggateway.model.MessageStatus;
+import com.cagan.messaginggateway.model.ResponseCodeType;
 import com.cagan.messaginggateway.repository.MessageLogRepository;
 import com.cagan.messaginggateway.repository.MessageRepository;
 import com.cagan.messaginggateway.rest.dto.request.MessageDeliveryRequest;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.AllArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import javax.transaction.Transactional;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Optional;
+
+import static com.cagan.messaginggateway.model.ResponseCodeType.*;
 
 @Service
-@AllArgsConstructor
-@Transactional
 public class MessageService {
     private static final Logger log = LoggerFactory.getLogger(MessageService.class);
-    private final CachingService cachingService;
-    private final MessageLogRepository messageLogRepository;
     private final MessageRepository messageRepository;
-    private final ClientRepository clientRepository;
+    private final MessageLogRepository messageLogRepository;
+    private final DeliveryService deliveryService;
 
-    public String forwardMessage(MessageDeliveryRequest request) throws JsonProcessingException {
-//        cachingService.put(request.getOriginatingAddress(), request);
-//        MessageDeliveryRequest request1 = cachingService.get(request.getOriginatingAddress());
-//        log.info("ADDRESS: [{}]", request1.getOriginatingAddress());
-//        log.info("CONTENT: [{}]", request1.getContent());
-        Client client = new Client();
-        client.setName("cagan");
-        clientRepository.save(client);
+    @Autowired
+    public MessageService(MessageRepository messageRepository, MessageLogRepository messageLogRepository, DeliveryService deliveryService) {
+        this.messageRepository = messageRepository;
+        this.messageLogRepository = messageLogRepository;
+        this.deliveryService = deliveryService;
+    }
 
+    public String forwardMessage(MessageDeliveryRequest request) {
         Message message = new Message();
-        message.setContent(request.getContent());
         message.setOriginatingAddress(request.getOriginatingAddress());
-        message.setClient(client);
-        ObjectMapper om = new ObjectMapper();
-        String recipientsJson = om.writer().writeValueAsString(request.getRecipients());
-        message.setRecipients(recipientsJson);
+        message.setContent(request.getContent());
+        message.setRecipients(request.getRecipients());
         messageRepository.save(message);
 
-        MessageLog messageLog = new MessageLog();
-        messageLog.setMessage(message);
-        messageLog.setStatus("TODO");
-        messageLog.setClient(client);
-        messageLogRepository.save(messageLog);
-
-        processMessagesScheduler();
-
-        return null;
-    }
-
-//    @Scheduled(cron = "0 0/1 ${gateway.start-time}-${gateway.end-time} * * ?", zone = "Europe/Istanbul")
-//    @Scheduled(fixedRate = 2000)
-    private void processMessagesScheduler() throws JsonProcessingException {
-        List<MessageLog> messageLogs =  messageLogRepository.findAllByStatusNotIn(List.of("DONE", "IN_PROGRESS"));
-
-        for (MessageLog messageLog : messageLogs) {
-            messageLog.setStatus("IN_PROGRESS");
+        request.getRecipients().forEach(recipient -> {
+            MessageLog messageLog = new MessageLog();
+            messageLog.setMessage(message);
+            messageLog.setStatus(MessageStatus.TODO.getValue());
+            messageLog.setRecipient(recipient);
             messageLogRepository.save(messageLog);
-            Message message = messageLog.getMessage();
-            sendToMessageCenter(message);
-            log.info("[Message: {}] has been processed: ", message.getId());
-        }
+        });
+
+        return message.getId();
     }
 
-    public void sendToMessageCenter(Message message) throws JsonProcessingException {
-        MessageServiceCenter messageServiceCenter = new MessageServiceCenter();
-        int requestThreshold = 3;
-        AtomicInteger current = new AtomicInteger();
+    @Scheduled(cron = "0 * * * * ?", zone = "Europe/Istanbul")
+    public void deliverMessagesJob() {
+        List<MessageLog> messageLogs = messageLogRepository.findAllByStatusIn(List.of(MessageStatus.TODO.getValue(), MessageStatus.FAILED.value()));
 
-        while (current.get() < requestThreshold) {
-            ObjectMapper om = new ObjectMapper();
-            List<String> recipients = om.readValue(message.getRecipients(), om.getTypeFactory().constructCollectionType(List.class, String.class));
+        if (messageLogs.isEmpty()) {
+            log.info("No Message found to send");
+            return;
+        }
 
-            recipients.forEach(recipient -> {
-                int status = messageServiceCenter.submitMessage(message.getOriginatingAddress(), recipient, message.getContent());
-                MessageLog messageLog = messageLogRepository.findByMessage(message);
+        for (MessageLog messageLog: messageLogs) {
+            Optional<Message> message = messageRepository.findById(messageLog.getMessage().getId());
 
-                switch (status) {
-                    case 0:
-                        messageLog.setStatus("DONE");
-                        messageLogRepository.save(messageLog);
-                        return;
-                    case 1:
-                        messageLog.setStatus("FAILED");
-                        messageLog.setFailedMessage("Number Unreachable");
-                        break;
-                    case 2:
-                        messageLog.setStatus("FAILED");
-                        messageLog.setFailedMessage("Network Error");
-                        break;
-                    case 3:
-                        messageLog.setStatus("FAILED");
-                        messageLog.setFailedMessage("Unknown Error");
-                }
-
-                messageLogRepository.save(messageLog);
-                current.getAndIncrement();
-            });
-
+            if (message.isEmpty()) {
+                log.warn("Message does not exists with id: {}", messageLog.getMessage().getId());
+                continue;
+            }
+            Message foundMessage = message.get();
+            deliveryService.sendDeliveryToGSM(foundMessage, messageLog);
         }
     }
 }
