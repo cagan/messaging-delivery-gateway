@@ -4,7 +4,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
 public enum MessageStatus {
-    TODO("TODO"), IN_PROGRESS("IN_PROGRESS"), FAILED("FAILED"), SUCCESS("SUCCESS");
+    TODO("TODO"), IN_PROGRESS("IN_PROGRESS"), FAILED("FAILED"), SUCCESS("SUCCESS"), CANCELED("CANCELED");
 
     private String value;
 

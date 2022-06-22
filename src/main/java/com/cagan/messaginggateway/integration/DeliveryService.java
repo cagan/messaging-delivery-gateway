@@ -2,7 +2,6 @@ package com.cagan.messaginggateway.integration;
 
 import com.cagan.messaginggateway.model.Message;
 import com.cagan.messaginggateway.model.MessageLog;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Recover;
 import org.springframework.retry.annotation.Retryable;
@@ -17,5 +16,5 @@ public interface DeliveryService {
     void sendDeliveryToGSM(Message message, MessageLog messageLog);
 
     @Recover
-    void recover(DeliveryFailedException exception, Message message, MessageLog messageLog);
+    void recoverDelivery(DeliveryFailedException exception, Message message, MessageLog messageLog);
 }

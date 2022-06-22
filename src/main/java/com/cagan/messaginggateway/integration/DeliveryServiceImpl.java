@@ -39,7 +39,7 @@ public class DeliveryServiceImpl implements DeliveryService {
     }
 
     @Override
-    public void recover(DeliveryFailedException exception, Message message, MessageLog messageLog) {
+    public void recoverDelivery(DeliveryFailedException exception, Message message, MessageLog messageLog) {
         messageLog.setStatus(MessageStatus.FAILED.value());
         messageLogRepository.save(messageLog);
 

@@ -6,5 +6,5 @@ import lombok.Data;
 @AllArgsConstructor
 @Data
 public class MessageDeliveryResponse {
-    private String messageId;
+    private String messageRequestId;
 }

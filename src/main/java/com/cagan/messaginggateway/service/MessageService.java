@@ -1,23 +1,22 @@
 package com.cagan.messaginggateway.service;
+
 import com.cagan.messaginggateway.integration.DeliveryService;
+import com.cagan.messaginggateway.model.Client;
 import com.cagan.messaginggateway.model.Message;
 import com.cagan.messaginggateway.model.MessageLog;
 import com.cagan.messaginggateway.model.MessageStatus;
-import com.cagan.messaginggateway.model.ResponseCodeType;
 import com.cagan.messaginggateway.repository.MessageLogRepository;
 import com.cagan.messaginggateway.repository.MessageRepository;
 import com.cagan.messaginggateway.rest.dto.request.MessageDeliveryRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Optional;
-
-import static com.cagan.messaginggateway.model.ResponseCodeType.*;
+import java.util.stream.Collectors;
 
 @Service
 public class MessageService {
@@ -33,7 +32,7 @@ public class MessageService {
         this.deliveryService = deliveryService;
     }
 
-    public String forwardMessage(MessageDeliveryRequest request) {
+    public String createMessageDeliveryRequest(MessageDeliveryRequest request) {
         Message message = new Message();
         message.setOriginatingAddress(request.getOriginatingAddress());
         message.setContent(request.getContent());
@@ -51,7 +50,7 @@ public class MessageService {
         return message.getId();
     }
 
-    @Scheduled(cron = "0 * * * * ?", zone = "Europe/Istanbul")
+    @Scheduled(cron = "${cron.expression}", zone = "Europe/Istanbul")
     public void deliverMessagesJob() {
         List<MessageLog> messageLogs = messageLogRepository.findAllByStatusIn(List.of(MessageStatus.TODO.getValue(), MessageStatus.FAILED.value()));
 
@@ -60,7 +59,7 @@ public class MessageService {
             return;
         }
 
-        for (MessageLog messageLog: messageLogs) {
+        for (MessageLog messageLog : messageLogs) {
             Optional<Message> message = messageRepository.findById(messageLog.getMessage().getId());
 
             if (message.isEmpty()) {
@@ -70,5 +69,25 @@ public class MessageService {
             Message foundMessage = message.get();
             deliveryService.sendDeliveryToGSM(foundMessage, messageLog);
         }
+    }
+
+    public Optional<List<MessageLog>> cancelMessage(String messageId) {
+        Optional<Message> message = messageRepository.findById(messageId);
+
+        if (message.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Message foundMessage = message.get();
+
+        List<MessageLog> canceledMessageLogs = messageLogRepository.findAllByMessage(foundMessage)
+                .stream().peek(messageLog -> {
+                    messageLog.setStatus(MessageStatus.CANCELED.value());
+                    log.info("[MESSAGE_LOG: {}] changed status to : [STATUS: {}] for [MESSAGE: {}]", messageLog, MessageStatus.CANCELED.value(), foundMessage);
+                }).toList();
+
+        messageLogRepository.saveAll(canceledMessageLogs);
+
+        return Optional.of(canceledMessageLogs);
     }
 }

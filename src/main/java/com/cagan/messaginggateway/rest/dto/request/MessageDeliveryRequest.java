@@ -10,16 +10,15 @@ import java.util.List;
 public class MessageDeliveryRequest implements Serializable {
     private static final long serialVersionUID = 3487495895819393L;
 
-
     @NotNull
     @NotBlank
     private String originatingAddress;
 
     @NotNull
     @Size(max = 1024)
-    @NotBlank
     private String content;
 
+    @NotNull
     @Size(min = 1, max = 10)
     private List<String> recipients;
 }
