@@ -1,77 +1,70 @@
 package com.cagan.messaginggateway.service;
 
-import com.cagan.messaginggateway.integration.DeliveryService;
-import com.cagan.messaginggateway.model.Client;
-import com.cagan.messaginggateway.model.Message;
-import com.cagan.messaginggateway.model.MessageLog;
-import com.cagan.messaginggateway.model.MessageStatus;
-import com.cagan.messaginggateway.repository.MessageLogRepository;
+import com.cagan.messaginggateway.domain.Message;
+import com.cagan.messaginggateway.domain.MessageStatus;
+import com.cagan.messaginggateway.domain.User;
+import com.cagan.messaginggateway.domain.MessageDeliveryRequestLog;
+import com.cagan.messaginggateway.repository.MessageDeliveryRequestLogRepository;
 import com.cagan.messaginggateway.repository.MessageRepository;
+import com.cagan.messaginggateway.repository.UserRepository;
 import com.cagan.messaginggateway.rest.dto.request.MessageDeliveryRequest;
+import com.cagan.messaginggateway.rest.error.DailyQuotaExceededException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 @Service
 public class MessageService {
     private static final Logger log = LoggerFactory.getLogger(MessageService.class);
     private final MessageRepository messageRepository;
-    private final MessageLogRepository messageLogRepository;
-    private final DeliveryService deliveryService;
+    private final MessageDeliveryRequestLogRepository messageDeliveryRequestRepository;
+    private final DailyMessageQuotaService dailyMessageQuotaService;
 
     @Autowired
-    public MessageService(MessageRepository messageRepository, MessageLogRepository messageLogRepository, DeliveryService deliveryService) {
+    public MessageService(MessageRepository messageRepository, MessageDeliveryRequestLogRepository messageLogRepository, DailyMessageQuotaService dailyMessageQuotaService) {
         this.messageRepository = messageRepository;
-        this.messageLogRepository = messageLogRepository;
-        this.deliveryService = deliveryService;
+        this.messageDeliveryRequestRepository = messageLogRepository;
+        this.dailyMessageQuotaService = dailyMessageQuotaService;
     }
 
-    public String createMessageDeliveryRequest(MessageDeliveryRequest request) {
+    public String createMessageDeliveryRequest(User user, MessageDeliveryRequest request) {
+        if(dailyMessageQuotaService.isDailyQuotaExceeded(user)) {
+            log.info("Daily quota limit exceeded for [USER: {}]", user);
+            throw new DailyQuotaExceededException();
+        }
+
         Message message = new Message();
         message.setOriginatingAddress(request.getOriginatingAddress());
         message.setContent(request.getContent());
         message.setRecipients(request.getRecipients());
-        messageRepository.save(message);
+        message.setClient(user);
+        var savedMessage = messageRepository.save(message);
+        log.info("[MESSAGE: {}] saved", savedMessage.getId());
 
-        request.getRecipients().forEach(recipient -> {
-            MessageLog messageLog = new MessageLog();
-            messageLog.setMessage(message);
-            messageLog.setStatus(MessageStatus.TODO.getValue());
-            messageLog.setRecipient(recipient);
-            messageLogRepository.save(messageLog);
-        });
+        List<MessageDeliveryRequestLog> messageDeliveryRequestLogs = message.getRecipients().stream().map(recipient -> {
+            MessageDeliveryRequestLog messageDeliveryRequest = new MessageDeliveryRequestLog();
+            messageDeliveryRequest.setExpirationTime(request.getExpirationTime().plus(Duration.ofHours(1)));
+            messageDeliveryRequest.setMessage(message);
+            messageDeliveryRequest.setRecipient(recipient);
+            messageDeliveryRequest.setStatus(MessageStatus.TODO.value());
+            messageDeliveryRequest.setUser(user);
+
+            log.info("[MESSAGE_DELIVERY_REQUEST: {}] saved", messageDeliveryRequest);
+            return messageDeliveryRequest;
+        }).toList();
+
+        messageDeliveryRequestRepository.saveAll(messageDeliveryRequestLogs);
+        dailyMessageQuotaService.incrementQuotaUsage(user);
 
         return message.getId();
     }
 
-    @Scheduled(cron = "${cron.expression}", zone = "Europe/Istanbul")
-    public void deliverMessagesJob() {
-        List<MessageLog> messageLogs = messageLogRepository.findAllByStatusIn(List.of(MessageStatus.TODO.getValue(), MessageStatus.FAILED.value()));
-
-        if (messageLogs.isEmpty()) {
-            log.info("No Message found to send");
-            return;
-        }
-
-        for (MessageLog messageLog : messageLogs) {
-            Optional<Message> message = messageRepository.findById(messageLog.getMessage().getId());
-
-            if (message.isEmpty()) {
-                log.warn("Message does not exists with id: {}", messageLog.getMessage().getId());
-                continue;
-            }
-            Message foundMessage = message.get();
-            deliveryService.sendDeliveryToGSM(foundMessage, messageLog);
-        }
-    }
-
-    public Optional<List<MessageLog>> cancelMessage(String messageId) {
+    public Optional<List<MessageDeliveryRequestLog>> cancelMessage(String messageId) {
         Optional<Message> message = messageRepository.findById(messageId);
 
         if (message.isEmpty()) {
@@ -80,13 +73,13 @@ public class MessageService {
 
         Message foundMessage = message.get();
 
-        List<MessageLog> canceledMessageLogs = messageLogRepository.findAllByMessage(foundMessage)
+        List<MessageDeliveryRequestLog> canceledMessageLogs = messageDeliveryRequestRepository.findAllByMessage(foundMessage)
                 .stream().peek(messageLog -> {
                     messageLog.setStatus(MessageStatus.CANCELED.value());
                     log.info("[MESSAGE_LOG: {}] changed status to : [STATUS: {}] for [MESSAGE: {}]", messageLog, MessageStatus.CANCELED.value(), foundMessage);
                 }).toList();
 
-        messageLogRepository.saveAll(canceledMessageLogs);
+        messageDeliveryRequestRepository.saveAll(canceledMessageLogs);
 
         return Optional.of(canceledMessageLogs);
     }
