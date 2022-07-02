@@ -6,15 +6,17 @@ import com.cagan.messaginggateway.domain.User;
 import com.cagan.messaginggateway.domain.MessageDeliveryRequestLog;
 import com.cagan.messaginggateway.repository.MessageDeliveryRequestLogRepository;
 import com.cagan.messaginggateway.repository.MessageRepository;
-import com.cagan.messaginggateway.repository.UserRepository;
 import com.cagan.messaginggateway.rest.dto.request.MessageDeliveryRequest;
 import com.cagan.messaginggateway.rest.error.DailyQuotaExceededException;
+import com.cagan.messaginggateway.rest.error.InvalidExpirationTimeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.io.Serializable;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -38,17 +40,32 @@ public class MessageService {
             throw new DailyQuotaExceededException();
         }
 
+        Message message = createMessage(user, request);
+        log.info("[MESSAGE: {}] saved", message.getId());
+
+        List<MessageDeliveryRequestLog> messageDeliveryRequestLogs = createMessageRequestLogs(message, user, request.getExpirationTime());
+        dailyMessageQuotaService.incrementQuotaUsage(user);
+
+        return message.getId();
+    }
+
+    protected Message createMessage(User user, MessageDeliveryRequest request) {
         Message message = new Message();
         message.setOriginatingAddress(request.getOriginatingAddress());
         message.setContent(request.getContent());
         message.setRecipients(request.getRecipients());
         message.setClient(user);
-        var savedMessage = messageRepository.save(message);
-        log.info("[MESSAGE: {}] saved", savedMessage.getId());
+        return messageRepository.save(message);
+    }
+
+    protected List<MessageDeliveryRequestLog> createMessageRequestLogs(Message message, User user, Instant expirationTime) {
+        if (expirationTime.compareTo(Instant.now().plus(Duration.ofHours(1))) < 0) {
+            throw new InvalidExpirationTimeException("Expiration time can not be less then current time");
+        }
 
         List<MessageDeliveryRequestLog> messageDeliveryRequestLogs = message.getRecipients().stream().map(recipient -> {
             MessageDeliveryRequestLog messageDeliveryRequest = new MessageDeliveryRequestLog();
-            messageDeliveryRequest.setExpirationTime(request.getExpirationTime().plus(Duration.ofHours(1)));
+            messageDeliveryRequest.setExpirationTime(expirationTime.plus(Duration.ofDays(1)));
             messageDeliveryRequest.setMessage(message);
             messageDeliveryRequest.setRecipient(recipient);
             messageDeliveryRequest.setStatus(MessageStatus.TODO.value());
@@ -59,9 +76,7 @@ public class MessageService {
         }).toList();
 
         messageDeliveryRequestRepository.saveAll(messageDeliveryRequestLogs);
-        dailyMessageQuotaService.incrementQuotaUsage(user);
-
-        return message.getId();
+        return messageDeliveryRequestLogs;
     }
 
     public Optional<List<MessageDeliveryRequestLog>> cancelMessage(String messageId) {
